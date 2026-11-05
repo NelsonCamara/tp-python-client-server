@@ -7,7 +7,7 @@ class Server(): # Classe principale du serveur
 
     def __init__(self, port): # Initialise le serveur avec un port
         self.listener= socket.socket(socket.AF_INET, socket.SOCK_STREAM) # Crée une socket IPv4 en TCP
-        self.listener.bind(('100.66.75.9', port)) # Écoute sur toutes les interfaces réseau du PC
+        self.listener.bind(('100.66.75.9', port)) # Écoute uniquement sur l'adresse IP du VPN
         self.listener.listen(1) # Met le serveur en écoute avec une file d'attente de 1 connexion
         print("Listening on port", port) # Affiche le port utilisé
         self.clients_sockets= [] # Liste des clients connectés

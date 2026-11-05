@@ -16,7 +16,7 @@ def rechercher(): # Recherche notre serveur NetBird
     try:
         test = socket.create_connection((ip, port), 2) # Vérifie si le serveur répond
         test.settimeout(2) # Attend maximum 2 secondes
-        test.sendall(b"DISCOVER\n") # Demande le nom du serveur
+        test.sendall(b"DISCOVER") # Demande le nom du serveur
         nom = test.recv(1024).decode("UTF-8") # Récupère la réponse
         test.close() # Ferme la connexion de test
 

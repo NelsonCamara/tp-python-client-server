@@ -1,141 +1,195 @@
 """
 client_gui.py
-Point d'entrée de l'application graphique.
-Assemble les composants Tkinter (thème moderne blanc, typographie Segoe UI en gras)
-et fait le pont avec la couche réseau (NetworkClient).
+Interface graphique utilisateur (IHM) basée sur les composants natifs Tkinter.
+Prend en charge :
+- L'architecture MVC/SoC avec NetworkClient
+- La recherche automatique des serveurs en UDP (Option 1)
+- La récupération et l'affichage dynamique du nom du serveur (Option 2)
 """
 
 import tkinter as tk
-from tkinter import messagebox
-from ui_widgets import RoundedButton, RoundedEntry, create_round_rect
+from tkinter import messagebox, ttk, Toplevel, Listbox
+import threading
 from network_client import NetworkClient
 
 class ChatClientGUI:
-    """Contrôleur principal de la vue graphique Tkinter."""
+    """Contrôleur de l'interface graphique native."""
 
     def __init__(self, root):
         self.root = root
         self.root.title("Chat Client — TP Réseau")
-        self.root.geometry("730x640")
-        self.root.configure(bg="#F4F5F7")
+        self.root.geometry("680x540")
+        self.root.minsize(500, 400)
 
-        # Initialisation du client réseau avec synchronisation thread-safe (root.after)
+        # Couche réseau découplée
         self.client = NetworkClient(
             on_message=lambda msg: self.root.after(0, self.append_text, msg),
-            on_disconnect=lambda: self.root.after(0, self._handle_disconnect)
+            on_disconnect=lambda: self.root.after(0, self._handle_disconnect),
+            on_server_name=lambda name: self.root.after(0, self._update_server_name, name)
         )
+
         self._build_ui()
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
 
     def _build_ui(self):
-        """Construit l'ensemble des éléments de l'interface utilisateur."""
-        # 1. Panneau supérieur : Paramètres de connexion
-        top = tk.Canvas(self.root, bg="#F4F5F7", highlightthickness=0, height=90)
-        top.pack(fill=tk.X, padx=18, pady=(14, 8))
-        create_round_rect(top, 2, 2, 690, 86, radius=18, fill="#FFFFFF", outline="#E0E2E6")
+        """Construit les éléments d'interface avec les widgets natifs de Tkinter."""
+        # 1. Barre de configuration supérieure (LabelFrame standard)
+        top_frame = tk.LabelFrame(self.root, text=" Paramètres de connexion ", padx=10, pady=8)
+        top_frame.pack(fill=tk.X, padx=10, pady=5)
 
-        # Champs arrondis préconfigurés
-        self.in_ip = RoundedEntry(top, width=145, default="100.66.75.9")
-        self.in_ip.place(x=20, y=34)
-        self.in_port = RoundedEntry(top, width=75, default="59001")
-        self.in_port.place(x=175, y=34)
-        self.in_user = RoundedEntry(top, width=130, default="Nelson")
-        self.in_user.place(x=260, y=34)
+        # Ligne d'entrées
+        tk.Label(top_frame, text="IP Serveur :").grid(row=0, column=0, sticky=tk.W, padx=4, pady=2)
+        self.entry_ip = tk.Entry(top_frame, width=16)
+        self.entry_ip.insert(0, "100.66.75.9")
+        self.entry_ip.grid(row=0, column=1, padx=4, pady=2)
 
-        for text, x in [("IP SERVEUR", 24), ("PORT", 179), ("PSEUDO", 264)]:
-            tk.Label(top, text=text, bg="#FFFFFF", fg="#000000", font=("Segoe UI", 9, "bold")).place(x=x, y=12)
+        tk.Label(top_frame, text="Port :").grid(row=0, column=2, sticky=tk.W, padx=4, pady=2)
+        self.entry_port = tk.Entry(top_frame, width=8)
+        self.entry_port.insert(0, "59001")
+        self.entry_port.grid(row=0, column=3, padx=4, pady=2)
 
-        # Bouton Connexion / Déconnexion
-        self.btn_conn = RoundedButton(top, "Connexion", self.toggle_connection, width=120)
-        self.btn_conn.place(x=410, y=33)
+        tk.Label(top_frame, text="Pseudo :").grid(row=0, column=4, sticky=tk.W, padx=4, pady=2)
+        self.entry_user = tk.Entry(top_frame, width=14)
+        self.entry_user.insert(0, "Nelson")
+        self.entry_user.grid(row=0, column=5, padx=4, pady=2)
 
-        # Bouton Quitter (fermeture de l'application)
-        RoundedButton(top, "Quitter", self.on_close, width=110, fill="#E53935", hover="#C62828").place(x=545, y=33)
+        # Boutons d'action
+        self.btn_scan = tk.Button(top_frame, text="Détecter", command=self.scan_servers_async)
+        self.btn_scan.grid(row=0, column=6, padx=6, pady=2)
 
-        # 2. Zone centrale : Historique du chat
-        self.chat_card = tk.Canvas(self.root, bg="#F4F5F7", highlightthickness=0)
-        self.chat_card.pack(fill=tk.BOTH, expand=True, padx=18, pady=6)
-        
-        self.bg_id = create_round_rect(self.chat_card, 2, 2, 690, 390, radius=20, fill="#FFFFFF", outline="#E0E2E6")
-        self.chat_card.bind("<Configure>", self._on_resize_chat)
+        self.btn_conn = tk.Button(top_frame, text="Connexion", command=self.toggle_connection, width=11)
+        self.btn_conn.grid(row=0, column=7, padx=4, pady=2)
 
-        self.txt = tk.Text(
-            self.chat_card, bg="#FFFFFF", fg="#000000", relief=tk.FLAT,
-            font=("Segoe UI", 10, "bold"), padx=16, pady=16, state=tk.DISABLED
-        )
-        self.txt.place(x=12, y=12, relwidth=0.96, relheight=0.93)
+        self.btn_quit = tk.Button(top_frame, text="Quitter", command=self.on_close)
+        self.btn_quit.grid(row=0, column=8, padx=4, pady=2)
 
-        # 3. Panneau inférieur : Capsule de saisie et bouton Envoi
-        bottom = tk.Canvas(self.root, bg="#F4F5F7", highlightthickness=0, height=60)
-        bottom.pack(fill=tk.X, padx=18, pady=(8, 18))
-        create_round_rect(bottom, 2, 2, 555, 48, radius=24, fill="#FFFFFF", outline="#E0E2E6")
+        # 2. Zone d'historique centrale
+        center_frame = tk.Frame(self.root)
+        center_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
 
-        self.in_msg = tk.Entry(bottom, bg="#FFFFFF", fg="#000000", relief=tk.FLAT, font=("Segoe UI", 10, "bold"))
-        self.in_msg.place(x=20, y=14, width=515, height=24)
-        self.in_msg.bind("<Return>", lambda _: self.send())
-        self.in_msg.config(state=tk.DISABLED)
+        self.scroll = tk.Scrollbar(center_frame)
+        self.scroll.pack(side=tk.RIGHT, fill=tk.Y)
 
-        self.btn_send = RoundedButton(bottom, "Envoyer", self.send, width=110, height=48, radius=24, bg="#F4F5F7")
-        self.btn_send.place(x=575, y=2)
+        self.txt = tk.Text(center_frame, wrap=tk.WORD, yscrollcommand=self.scroll.set, state=tk.DISABLED)
+        self.txt.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self.scroll.config(command=self.txt.yview)
 
-    def _on_resize_chat(self, event):
-        """Adapte les dimensions du rectangle arrondi lorsque la fenêtre s'étire."""
-        self.chat_card.delete(self.bg_id)
-        self.bg_id = create_round_rect(
-            self.chat_card, 2, 2, event.width - 4, event.height - 4, radius=20, fill="#FFFFFF", outline="#E0E2E6"
-        )
-        self.chat_card.tag_lower(self.bg_id)
+        # 3. Zone d'envoi inférieure
+        bottom_frame = tk.Frame(self.root)
+        bottom_frame.pack(fill=tk.X, padx=10, pady=(5, 10))
+
+        self.entry_msg = tk.Entry(bottom_frame, state=tk.DISABLED)
+        self.entry_msg.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 6))
+        self.entry_msg.bind("<Return>", lambda _: self.send())
+
+        self.btn_send = tk.Button(bottom_frame, text="Envoyer", command=self.send, width=10, state=tk.DISABLED)
+        self.btn_send.pack(side=tk.RIGHT)
 
     def append_text(self, text):
-        """Ajoute du texte à la zone d'historique en respectant l'état DISABLED."""
+        """Insère un message dans la console d'affichage."""
         self.txt.config(state=tk.NORMAL)
         self.txt.insert(tk.END, text + "\n")
         self.txt.see(tk.END)
         self.txt.config(state=tk.DISABLED)
 
+    # --- Option 1 : Auto-détection UDP ---
+    def scan_servers_async(self):
+        self.append_text("--- Recherche de serveurs actifs sur le réseau... ---")
+        threading.Thread(target=self._scan_thread, daemon=True).start()
+
+    def _scan_thread(self):
+        servers = NetworkClient.discover_servers(timeout=1.5)
+        self.root.after(0, self._show_discovered_servers, servers)
+
+    def _show_discovered_servers(self, servers):
+        if not servers:
+            self.append_text("--- Aucun serveur détecté en broadcast ---")
+            messagebox.showinfo("Détection", "Aucun serveur actif trouvé.")
+            return
+
+        win = Toplevel(self.root)
+        win.title("Serveurs Détectés")
+        win.geometry("340x220")
+        win.transient(self.root)
+        win.grab_set()
+
+        tk.Label(win, text="Double-cliquez pour choisir un serveur :").pack(padx=8, pady=6)
+        
+        listbox = Listbox(win)
+        listbox.pack(fill=tk.BOTH, expand=True, padx=10, pady=4)
+
+        for s in servers:
+            listbox.insert(tk.END, f"{s['name']} — {s['ip']}:{s['port']}")
+
+        def select():
+            sel = listbox.curselection()
+            if sel:
+                chosen = servers[sel[0]]
+                self.entry_ip.delete(0, tk.END)
+                self.entry_ip.insert(0, chosen["ip"])
+                self.entry_port.delete(0, tk.END)
+                self.entry_port.insert(0, str(chosen["port"]))
+                self.append_text(f"--- Sélectionné : {chosen['name']} ({chosen['ip']}:{chosen['port']}) ---")
+                win.destroy()
+
+        listbox.bind("<Double-Button-1>", lambda _: select())
+        tk.Button(win, text="Sélectionner", command=select).pack(pady=6)
+
+    # --- Gestion de connexion ---
     def toggle_connection(self):
-        """Bascule entre l'état connecté et déconnecté."""
         if not self.client.is_connected:
             try:
-                ip = self.in_ip.get()
-                port = int(self.in_port.get())
-                user = self.in_user.get()
+                ip = self.entry_ip.get().strip()
+                port = int(self.entry_port.get().strip())
+                user = self.entry_user.get().strip()
+                if not user:
+                    messagebox.showwarning("Attention", "Le pseudo ne peut pas être vide.")
+                    return
+
                 self.client.connect(ip, port, user)
-                
-                # Mise à jour de l'état des entrées
-                self.btn_conn.set_text("Déconnexion")
-                self.in_ip.set_state(tk.DISABLED)
-                self.in_port.set_state(tk.DISABLED)
-                self.in_user.set_state(tk.DISABLED)
-                self.in_msg.config(state=tk.NORMAL)
-                self.in_msg.focus()
-                
+
+                # Verrouillage des paramètres et activation du chat
+                self.btn_conn.config(text="Déconnexion")
+                self.entry_ip.config(state=tk.DISABLED)
+                self.entry_port.config(state=tk.DISABLED)
+                self.entry_user.config(state=tk.DISABLED)
+                self.entry_msg.config(state=tk.NORMAL)
+                self.btn_send.config(state=tk.NORMAL)
+                self.entry_msg.focus()
+
                 self.append_text(f"--- Connecté au serveur ({ip}:{port}) ---")
+                # Option 2 : Demande immédiate du nom du serveur
+                self.client.request_server_name()
+
             except Exception as e:
-                messagebox.showerror("Erreur de connexion", f"Impossible d'établir la liaison :\n{e}")
+                messagebox.showerror("Erreur de connexion", f"Connexion impossible :\n{e}")
         else:
             self.client.disconnect()
             self._handle_disconnect()
 
+    def _update_server_name(self, name):
+        """Mise à jour suite au retour de l'Option 2."""
+        self.root.title(f"Chat Client — Connecté à [{name}]")
+        self.append_text(f"--- Nom du serveur : {name} ---")
+
     def _handle_disconnect(self):
-        """Réinitialise l'IHM lors d'une déconnexion."""
-        self.btn_conn.set_text("Connexion")
-        self.in_ip.set_state(tk.NORMAL)
-        self.in_port.set_state(tk.NORMAL)
-        self.in_user.set_state(tk.NORMAL)
-        self.in_msg.delete(0, tk.END)
-        self.in_msg.config(state=tk.DISABLED)
+        self.root.title("Chat Client — TP Réseau")
+        self.btn_conn.config(text="Connexion")
+        self.entry_ip.config(state=tk.NORMAL)
+        self.entry_port.config(state=tk.NORMAL)
+        self.entry_user.config(state=tk.NORMAL)
+        self.entry_msg.delete(0, tk.END)
+        self.entry_msg.config(state=tk.DISABLED)
+        self.btn_send.config(state=tk.DISABLED)
         self.append_text("--- Déconnecté du serveur ---")
 
     def send(self):
-        """Récupère le message saisi et le transmet via le socket TCP."""
-        msg = self.in_msg.get().strip()
+        msg = self.entry_msg.get().strip()
         if msg and self.client.is_connected:
-            self.client.send(f"{self.in_user.get()}: {msg}")
-            self.in_msg.delete(0, tk.END)
+            self.client.send(f"{self.entry_user.get()}: {msg}")
+            self.entry_msg.delete(0, tk.END)
 
     def on_close(self):
-        """Interruption propre avant fermeture de l'UI."""
         self.client.disconnect()
         self.root.destroy()
 
